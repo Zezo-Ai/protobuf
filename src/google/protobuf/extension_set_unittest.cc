@@ -148,7 +148,7 @@ TEST(ExtensionSetTest, SetAllocatedExtension) {
   message.SetAllocatedExtension(unittest::optional_foreign_message_extension,
                                 new unittest::ForeignMessage());
 
-  // SetAllocatedExtension with nullptr is equivalent to ClearExtenion.
+  // SetAllocatedExtension with nullptr is equivalent to ClearExtension.
   message.SetAllocatedExtension(unittest::optional_foreign_message_extension,
                                 nullptr);
   EXPECT_FALSE(
@@ -1193,6 +1193,9 @@ TEST(ExtensionSetTest, DynamicExtensions) {
   // Test adding a dynamic extension to a compiled-in message object.
 
   FileDescriptorProto dynamic_proto;
+  unittest::TestDynamicExtensions::descriptor()->file()->CopyHeadingTo(
+      &dynamic_proto);
+  dynamic_proto.clear_dependency();
   dynamic_proto.set_name("dynamic_extensions_test.proto");
   dynamic_proto.add_dependency(
       unittest::TestAllExtensions::descriptor()->file()->name());

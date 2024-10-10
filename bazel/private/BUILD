@@ -1,8 +1,31 @@
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
 load("//bazel/private:native_bool_flag.bzl", "native_bool_flag")
 
+package(default_applicable_licenses = ["//:license"])
+
 toolchain_type(
     name = "proto_toolchain_type",
+    visibility = ["//visibility:public"],
+)
+
+toolchain_type(
+    name = "cc_toolchain_type",
+    visibility = ["//visibility:public"],
+)
+
+toolchain_type(
+    name = "java_toolchain_type",
+    visibility = ["//visibility:public"],
+)
+
+toolchain_type(
+    name = "javalite_toolchain_type",
+    visibility = ["//visibility:public"],
+)
+
+toolchain_type(
+    name = "python_toolchain_type",
+    visibility = ["//visibility:public"],
 )
 
 bzl_library(
@@ -27,6 +50,22 @@ bzl_library(
         "native.bzl",
     ],
     visibility = ["//bazel:__subpackages__"],
+)
+
+bzl_library(
+    name = "bazel_proto_library_rule_bzl",
+    srcs = [
+        "bazel_proto_library_rule.bzl",
+    ],
+    visibility = ["//bazel:__subpackages__"],
+    deps = [
+        "//bazel/common:proto_common_bzl",
+        "//bazel/common:proto_info_bzl",
+        "//bazel/private:toolchain_helpers_bzl",
+        "@bazel_skylib//lib:paths",
+        "@bazel_skylib//rules:common_settings",
+        "@proto_bazel_features//:features",
+    ],
 )
 
 bzl_library(
@@ -90,4 +129,12 @@ native_bool_flag(
     match_value = "off",
     result = False,
     visibility = ["//bazel:__subpackages__"],
+)
+
+filegroup(
+    name = "bazel_osx_p4deps",
+    srcs = glob(["**"]),
+    visibility = [
+        "//bazel:__pkg__",
+    ],
 )

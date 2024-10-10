@@ -46,6 +46,7 @@
 #include "google/protobuf/map_proto2_unittest.pb.h"
 #include "google/protobuf/map_proto3_unittest.pb.h"
 #include "google/protobuf/message.h"
+#include "google/protobuf/port.h"
 #include "google/protobuf/reflection.h"
 #include "google/protobuf/reflection_ops.h"
 #include "google/protobuf/test_util2.h"
@@ -111,6 +112,8 @@ struct ConstructorTag {
       : invoked_constructor(ConstructorType::kMove) {}
 
   bool operator<(const ConstructorTag&) const { return false; }
+
+  bool operator==(const ConstructorTag&) const { return true; }
 
   ConstructorType invoked_constructor;
 };
@@ -314,16 +317,6 @@ TEST_F(MapImplTest, OperatorBracket) {
 }  // namespace protobuf
 }  // namespace google
 
-namespace std {
-
-template <>  // NOLINT
-struct hash<google::protobuf::internal::MoveTestKey> {
-  size_t operator()(const google::protobuf::internal::MoveTestKey& key) const {
-    return hash<uint64_t>{}(key.data);
-  }
-};
-}  // namespace std
-
 namespace google {
 namespace protobuf {
 namespace internal {
@@ -333,6 +326,45 @@ struct RealKeyToVariantKey<MoveTestKey> {
   VariantKey operator()(const MoveTestKey& value) const {
     return VariantKey(value.data);
   }
+};
+
+template <>
+struct RealKeyToVariantKeyAlternative<MoveTestKey> {
+  VariantKey operator()(const MoveTestKey& value) const {
+    return VariantKey(value.data);
+  }
+};
+
+template <>
+struct TransparentSupport<MoveTestKey> {
+  using hash = absl::Hash<MoveTestKey>;
+
+  static bool Equals(const MoveTestKey& a, const MoveTestKey& b) {
+    return a == b;
+  }
+
+  template <typename K>
+  using key_arg = MoveTestKey;
+
+  using ViewType = const MoveTestKey&;
+
+  static ViewType ToView(ViewType v) { return v; }
+};
+
+template <>
+struct TransparentSupport<ConstructorTag> {
+  using hash = absl::Hash<ConstructorTag>;
+
+  static bool Equals(const ConstructorTag& a, const ConstructorTag& b) {
+    return a == b;
+  }
+
+  template <typename K>
+  using key_arg = ConstructorTag;
+
+  using ViewType = const ConstructorTag&;
+
+  static ViewType ToView(ViewType v) { return v; }
 };
 
 namespace {
@@ -1009,7 +1041,7 @@ TEST_F(MapImplTest, EraseSingleByKey) {
   EXPECT_EQ(0, map_.erase(key));
 }
 
-TEST_F(MapImplTest, EraseMutipleByKey) {
+TEST_F(MapImplTest, EraseMultipleByKey) {
   // erase in one specific order to trigger corner cases
   for (int i = 0; i < 5; i++) {
     map_[i] = i;
@@ -2321,7 +2353,7 @@ TEST_F(MapFieldReflectionTest, UninitializedEntry) {
 }
 
 class MyMapEntry
-    : public internal::MapEntry<MyMapEntry, ::int32_t, ::int32_t,
+    : public internal::MapEntry<::int32_t, ::int32_t,
                                 internal::WireFormatLite::TYPE_INT32,
                                 internal::WireFormatLite::TYPE_INT32> {
  public:
@@ -2732,7 +2764,7 @@ TEST(GeneratedMapFieldTest, Proto2UnknownEnum) {
   EXPECT_EQ(UNITTEST::PROTO2_MAP_ENUM_FOO, to.known_map_field().at(0));
 }
 
-TEST(GeneratedMapFieldTest, Proto2UknownEnumThrowsAwayUnknownData) {
+TEST(GeneratedMapFieldTest, Proto2UnknownEnumThrowsAwayUnknownData) {
   UNITTEST::TestEnumMap to;
   // 101: {
   //   1: 2
@@ -3263,9 +3295,9 @@ TEST(GeneratedMapFieldReflectionTest, ReleaseLast) {
   std::vector<const Message*> release_last =
       MapTestUtil::GetMapEntriesFromRelease(&message);
   MapTestUtil::ExpectMapsSize(message, 1);
-#ifndef PROTOBUF_FORCE_COPY_IN_RELEASE
-  EXPECT_TRUE(expect_last == release_last);
-#endif  // !PROTOBUF_FORCE_COPY_IN_RELEASE
+  if (!internal::DebugHardenForceCopyInRelease()) {
+    EXPECT_TRUE(expect_last == release_last);
+  }
   for (std::vector<const Message*>::iterator it = release_last.begin();
        it != release_last.end(); ++it) {
     delete *it;

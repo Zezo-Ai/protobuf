@@ -22,8 +22,7 @@
 #include "google/protobuf/compiler/hpb/names.h"
 #include "google/protobuf/compiler/hpb/output.h"
 #include "google/protobuf/descriptor.h"
-#include "upb_generator/common.h"
-#include "upb_generator/file_layout.h"
+#include "upb_generator/minitable/names.h"
 
 namespace google::protobuf::hpb_generator {
 
@@ -101,7 +100,6 @@ void WriteModelAccessDeclaration(const protobuf::Descriptor* descriptor,
               : msg_(const_cast<$1*>(msg)), arena_(arena) {
             assert(arena != nullptr);
           }  // NOLINT
-          void* GetInternalArena() const { return arena_; }
       )cc",
       ClassName(descriptor), MessageName(descriptor));
   WriteFieldAccessorsInHeader(descriptor, output);
@@ -206,7 +204,7 @@ void WriteModelPublicDeclaration(
           }
       )cc",
       ClassName(descriptor),
-      ::upb::generator::MessageInit(descriptor->full_name()),
+      ::upb::generator::MiniTableMessageVarName(descriptor->full_name()),
       MessageName(descriptor), QualifiedClassName(descriptor));
 
   WriteUsingAccessorsInHeader(descriptor, MessageClassType::kMessage, output);
@@ -226,7 +224,6 @@ void WriteModelPublicDeclaration(
   output(
       R"cc(
         static const upb_MiniTable* minitable();
-        using $0Access::GetInternalArena;
       )cc",
       ClassName(descriptor));
   output("\n");
@@ -236,6 +233,8 @@ void WriteModelPublicDeclaration(
         private:
         const upb_Message* msg() const { return UPB_UPCAST(msg_); }
         upb_Message* msg() { return UPB_UPCAST(msg_); }
+
+        upb_Arena* arena() const { return arena_; }
 
         $0(upb_Message* msg, upb_Arena* arena) : $0Access() {
           msg_ = ($1*)msg;
@@ -253,7 +252,8 @@ void WriteModelPublicDeclaration(
             const ::hpb::ExtensionRegistry& extension_registry, int options));
         friend upb_Arena* hpb::interop::upb::GetArena<$0>($0* message);
         friend upb_Arena* hpb::interop::upb::GetArena<$0>(::hpb::Ptr<$0> message);
-        friend $0(::hpb::internal::MoveMessage<$0>(upb_Message* msg, upb_Arena* arena));
+        friend $0(hpb::interop::upb::MoveMessage<$0>(upb_Message* msg,
+                                                     upb_Arena* arena));
       )cc",
       ClassName(descriptor), MessageName(descriptor),
       QualifiedClassName(descriptor));
@@ -282,7 +282,6 @@ void WriteModelProxyDeclaration(const protobuf::Descriptor* descriptor,
             arena_ = m.arena_;
             return *this;
           }
-          using $0Access::GetInternalArena;
       )cc",
       ClassName(descriptor));
 
@@ -294,6 +293,8 @@ void WriteModelProxyDeclaration(const protobuf::Descriptor* descriptor,
       R"cc(
         private:
         upb_Message* msg() const { return UPB_UPCAST(msg_); }
+
+        upb_Arena* arena() const { return arena_; }
 
         $0Proxy(upb_Message* msg, upb_Arena* arena)
             : internal::$0Access(($1*)msg, arena) {}
@@ -334,7 +335,6 @@ void WriteModelCProxyDeclaration(const protobuf::Descriptor* descriptor,
           $0CProxy(const $0* m)
               : internal::$0Access(m->msg_, hpb::interop::upb::GetArena(m)) {}
           $0CProxy($0Proxy m);
-          using $0Access::GetInternalArena;
       )cc",
       ClassName(descriptor), MessageName(descriptor));
 
@@ -347,6 +347,7 @@ void WriteModelCProxyDeclaration(const protobuf::Descriptor* descriptor,
         private:
         using AsNonConst = $0Proxy;
         const upb_Message* msg() const { return UPB_UPCAST(msg_); }
+        upb_Arena* arena() const { return arena_; }
 
         $0CProxy(const upb_Message* msg, upb_Arena* arena)
             : internal::$0Access(($1*)msg, arena){};
@@ -396,12 +397,12 @@ void WriteMessageImplementation(
           $0::$0(const CProxy& from) : $0Access() {
             arena_ = owned_arena_.ptr();
             msg_ = ($1*)::hpb::internal::DeepClone(
-                ::hpb::internal::GetInternalMsg(&from), &$2, arena_);
+                ::hpb::interop::upb::GetMessage(&from), &$2, arena_);
           }
           $0::$0(const Proxy& from) : $0(static_cast<const CProxy&>(from)) {}
           internal::$0CProxy::$0CProxy($0Proxy m) : $0Access() {
             arena_ = m.arena_;
-            msg_ = ($1*)::hpb::internal::GetInternalMsg(&m);
+            msg_ = ($1*)::hpb::interop::upb::GetMessage(&m);
           }
           $0& $0::operator=(const $3& from) {
             arena_ = owned_arena_.ptr();
@@ -411,12 +412,12 @@ void WriteMessageImplementation(
           $0& $0::operator=(const CProxy& from) {
             arena_ = owned_arena_.ptr();
             msg_ = ($1*)::hpb::internal::DeepClone(
-                ::hpb::internal::GetInternalMsg(&from), &$2, arena_);
+                ::hpb::interop::upb::GetMessage(&from), &$2, arena_);
             return *this;
           }
         )cc",
         ClassName(descriptor), MessageName(descriptor),
-        ::upb::generator::MessageInit(descriptor->full_name()),
+        ::upb::generator::MiniTableMessageVarName(descriptor->full_name()),
         QualifiedClassName(descriptor));
     output("\n");
     // Minitable
@@ -425,7 +426,7 @@ void WriteMessageImplementation(
           const upb_MiniTable* $0::minitable() { return &$1; }
         )cc",
         ClassName(descriptor),
-        ::upb::generator::MessageInit(descriptor->full_name()));
+        ::upb::generator::MiniTableMessageVarName(descriptor->full_name()));
     output("\n");
   }
 

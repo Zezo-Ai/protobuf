@@ -9,19 +9,19 @@
 
 use crate::__internal::{Enum, Private};
 use crate::{
-    IntoProxied, Map, MapIter, Mut, ProtoBytes, ProtoStr, ProtoString, Proxied, ProxiedInMapValue,
-    ProxiedInRepeated, Repeated, RepeatedMut, RepeatedView, View, MapMut, MapView,
+    IntoProxied, Map, MapIter, MapMut, MapView, Mut, ProtoBytes, ProtoStr, ProtoString, Proxied,
+    ProxiedInMapValue, ProxiedInRepeated, Repeated, RepeatedMut, RepeatedView, View,
 };
-use paste::paste;
-use std::fmt;
-use std::slice;
-use std::convert::identity;
 use core::fmt::Debug;
+use paste::paste;
+use std::convert::identity;
+use std::ffi::{c_int, c_void};
+use std::fmt;
 use std::marker::PhantomData;
+use std::mem::{ManuallyDrop, MaybeUninit};
 use std::ops::Deref;
 use std::ptr::{self, NonNull};
-use std::ffi::{c_int, c_void};
-use std::mem::{ManuallyDrop, MaybeUninit};
+use std::slice;
 
 /// Defines a set of opaque, unique, non-accessible pointees.
 ///
@@ -109,11 +109,6 @@ extern "C" {
     pub fn proto2_rust_Message_copy_from(dst: RawMessage, src: RawMessage) -> bool;
     pub fn proto2_rust_Message_merge_from(dst: RawMessage, src: RawMessage) -> bool;
 }
-
-/// An opaque type matching MapNodeSizeInfoT from C++.
-#[doc(hidden)]
-#[repr(transparent)]
-pub struct MapNodeSizeInfo(pub i32);
 
 impl Drop for InnerProtoString {
     fn drop(&mut self) {
@@ -339,14 +334,8 @@ pub fn debug_string(msg: RawMessage, f: &mut fmt::Formatter<'_>) -> fmt::Result 
 extern "C" {
     /// # Safety
     /// - `msg1` and `msg2` legally dereferencable MessageLite* pointers.
-    fn proto2_rust_messagelite_equals(msg1: RawMessage, msg2: RawMessage) -> bool;
-}
-
-/// # Safety
-/// - `msg1` and `msg2` legally dereferencable MessageLite* pointers.
-pub unsafe fn raw_message_equals(msg1: RawMessage, msg2: RawMessage) -> bool {
-    // SAFETY: Same constraints placed on caller.
-    unsafe { proto2_rust_messagelite_equals(msg1, msg2) }
+    #[link_name = "proto2_rust_messagelite_equals"]
+    pub fn raw_message_equals(msg1: RawMessage, msg2: RawMessage) -> bool;
 }
 
 pub type RawMapIter = UntypedMapIterator;
@@ -728,13 +717,11 @@ impl UntypedMapIterator {
     pub unsafe fn next_unchecked<'a, K, V, FfiKey, FfiValue>(
         &mut self,
 
-        iter_get_thunk: unsafe extern "C" fn(
+        iter_get_thunk: unsafe fn(
             iter: &mut UntypedMapIterator,
-            size_info: MapNodeSizeInfo,
             key: *mut FfiKey,
             value: *mut FfiValue,
         ),
-        size_info: MapNodeSizeInfo,
         from_ffi_key: impl FnOnce(FfiKey) -> View<'a, K>,
         from_ffi_value: impl FnOnce(FfiValue) -> View<'a, V>,
     ) -> Option<(View<'a, K>, View<'a, V>)>
@@ -752,7 +739,7 @@ impl UntypedMapIterator {
         // - The iterator is not at the end (node is non-null).
         // - `ffi_key` and `ffi_value` are not read (as uninit) as promised by the
         //   caller.
-        unsafe { (iter_get_thunk)(self, size_info, ffi_key.as_mut_ptr(), ffi_value.as_mut_ptr()) }
+        unsafe { (iter_get_thunk)(self, ffi_key.as_mut_ptr(), ffi_value.as_mut_ptr()) }
 
         // SAFETY:
         // - The backing map is alive as promised by the caller.
@@ -775,36 +762,45 @@ impl UntypedMapIterator {
     }
 }
 
+// This enum is used to pass some information about the key type of a map to
+// C++. The main purpose is to indicate the size of the key so that we can
+// determine the correct size and offset information of map entries on the C++
+// side. We also rely on it to indicate whether the key is a string or not.
 #[doc(hidden)]
-#[repr(transparent)]
-pub struct MapNodeSizeInfoIndex(i32);
-
-#[doc(hidden)]
-pub trait MapNodeSizeInfoIndexForType {
-    const SIZE_INFO_INDEX: MapNodeSizeInfoIndex;
+#[repr(u8)]
+pub enum MapKeyCategory {
+    OneByte,
+    FourBytes,
+    EightBytes,
+    StdString,
 }
 
-macro_rules! generate_map_node_size_info_mapping {
-    ( $($key:ty, $index:expr;)* ) => {
+#[doc(hidden)]
+pub trait MapKey {
+    const CATEGORY: MapKeyCategory;
+}
+
+macro_rules! generate_map_key_impl {
+    ( $($key:ty, $category:expr;)* ) => {
         $(
-        impl MapNodeSizeInfoIndexForType for $key {
-            const SIZE_INFO_INDEX: MapNodeSizeInfoIndex = MapNodeSizeInfoIndex($index);
+        impl MapKey for $key {
+            const CATEGORY: MapKeyCategory = $category;
         }
         )*
     }
 }
 
-// LINT.IfChange(size_info_mapping)
-generate_map_node_size_info_mapping!(
-    i32, 0;
-    u32, 0;
-    i64, 1;
-    u64, 1;
-    bool, 2;
-    ProtoString, 3;
+// LINT.IfChange(map_key_category)
+generate_map_key_impl!(
+    bool, MapKeyCategory::OneByte;
+    i32, MapKeyCategory::FourBytes;
+    u32, MapKeyCategory::FourBytes;
+    i64, MapKeyCategory::EightBytes;
+    u64, MapKeyCategory::EightBytes;
+    ProtoString, MapKeyCategory::StdString;
 );
-// LINT.ThenChange(//depot/google3/third_party/protobuf/compiler/rust/message.
-// cc:size_info_mapping)
+// LINT.ThenChange(//depot/google3/third_party/protobuf/rust/cpp_kernel/map.cc:
+// map_key_category)
 
 macro_rules! impl_map_primitives {
     (@impl $(($rust_type:ty, $cpp_type:ty) => [
@@ -817,24 +813,22 @@ macro_rules! impl_map_primitives {
             extern "C" {
                 pub fn $insert_thunk(
                     m: RawMap,
-                    size_info: MapNodeSizeInfo,
                     key: $cpp_type,
                     value: RawMessage,
-                    placement_new: unsafe extern "C" fn(*mut c_void, m: RawMessage),
                 ) -> bool;
                 pub fn $get_thunk(
                     m: RawMap,
-                    size_info: MapNodeSizeInfo,
+                    prototype: RawMessage,
                     key: $cpp_type,
                     value: *mut RawMessage,
                 ) -> bool;
                 pub fn $iter_get_thunk(
                     iter: &mut UntypedMapIterator,
-                    size_info: MapNodeSizeInfo,
+                    prototype: RawMessage,
                     key: *mut $cpp_type,
                     value: *mut RawMessage,
                 );
-                pub fn $remove_thunk(m: RawMap, size_info: MapNodeSizeInfo, key: $cpp_type) -> bool;
+                pub fn $remove_thunk(m: RawMap, prototype: RawMessage, key: $cpp_type) -> bool;
             }
         )*
     };
@@ -865,8 +859,8 @@ extern "C" {
     fn proto2_rust_thunk_UntypedMapIterator_increment(iter: &mut UntypedMapIterator);
 
     pub fn proto2_rust_map_new() -> RawMap;
-    pub fn proto2_rust_map_free(m: RawMap, key_is_string: bool, size_info: MapNodeSizeInfo);
-    pub fn proto2_rust_map_clear(m: RawMap, key_is_string: bool, size_info: MapNodeSizeInfo);
+    pub fn proto2_rust_map_free(m: RawMap, category: MapKeyCategory, prototype: RawMessage);
+    pub fn proto2_rust_map_clear(m: RawMap, category: MapKeyCategory, prototype: RawMessage);
     pub fn proto2_rust_map_size(m: RawMap) -> usize;
     pub fn proto2_rust_map_iter(m: RawMap) -> UntypedMapIterator;
 }
@@ -882,7 +876,7 @@ macro_rules! impl_ProxiedInMapValue_for_non_generated_value_types {
                 pub fn [< proto2_rust_thunk_Map_ $key_t _ $t _insert >](m: RawMap, key: $ffi_key_t, value: $ffi_value_t) -> bool;
                 pub fn [< proto2_rust_thunk_Map_ $key_t _ $t _get >](m: RawMap, key: $ffi_key_t, value: *mut $ffi_view_t) -> bool;
                 pub fn [< proto2_rust_thunk_Map_ $key_t _ $t _iter >](m: RawMap) -> UntypedMapIterator;
-                pub fn [< proto2_rust_thunk_Map_ $key_t _ $t _iter_get >](iter: &mut UntypedMapIterator, size_info: MapNodeSizeInfo, key: *mut $ffi_key_t, value: *mut $ffi_view_t);
+                pub fn [< proto2_rust_thunk_Map_ $key_t _ $t _iter_get >](iter: &mut UntypedMapIterator, key: *mut $ffi_key_t, value: *mut $ffi_view_t);
                 pub fn [< proto2_rust_thunk_Map_ $key_t _ $t _remove >](m: RawMap, key: $ffi_key_t, value: *mut $ffi_view_t) -> bool;
             }
 
@@ -961,8 +955,7 @@ macro_rules! impl_ProxiedInMapValue_for_non_generated_value_types {
                     // - The thunk does not increment the iterator.
                     unsafe {
                         iter.as_raw_mut(Private).next_unchecked::<$key_t, Self, _, _>(
-                            [< proto2_rust_thunk_Map_ $key_t _ $t _iter_get >],
-                            MapNodeSizeInfo(0),
+                            |iter, key, value| { [< proto2_rust_thunk_Map_ $key_t _ $t _iter_get >](iter, key, value) },
                             $from_ffi_key,
                             $from_ffi_value,
                         )

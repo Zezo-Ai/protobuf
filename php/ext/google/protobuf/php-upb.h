@@ -85,6 +85,12 @@ Error, UINTPTR_MAX is undefined
 #define UPB_API_INLINE UPB_INLINE
 #endif
 
+#ifdef EXPORT_UPBC
+#define UPBC_API UPB_EXPORT
+#else
+#define UPBC_API
+#endif
+
 #define UPB_MALLOC_ALIGN 8
 #define UPB_ALIGN_UP(size, align) (((size) + (align) - 1) / (align) * (align))
 #define UPB_ALIGN_DOWN(size, align) ((size) / (align) * (align))
@@ -329,10 +335,6 @@ void __asan_unpoison_memory_region(void const volatile *addr, size_t size);
 #define UPB_DEPRECATED
 #endif
 
-// begin:google_only
-// #define UPB_IS_GOOGLE3
-// end:google_only
-
 #if defined(UPB_IS_GOOGLE3) && \
     (!defined(UPB_BOOTSTRAP_STAGE) || UPB_BOOTSTRAP_STAGE != 0)
 #define UPB_DESC(sym) proto2_##sym
@@ -345,6 +347,7 @@ void __asan_unpoison_memory_region(void const volatile *addr, size_t size);
 #define UPB_DESC_MINITABLE(sym) &google__protobuf__##sym##_msg_init
 #endif
 
+#undef UPB_IS_GOOGLE3
 
 // Linker arrays combine elements from multiple translation units into a single
 // array that can be iterated over at runtime.
@@ -372,8 +375,9 @@ void __asan_unpoison_memory_region(void const volatile *addr, size_t size);
 
 #if defined(__ELF__) || defined(__wasm__)
 
-#define UPB_LINKARR_APPEND(name) \
-  __attribute__((retain, used, section("linkarr_" #name)))
+#define UPB_LINKARR_APPEND(name)                          \
+  __attribute__((retain, used, section("linkarr_" #name), \
+                 no_sanitize("address")))
 #define UPB_LINKARR_DECLARE(name, type)     \
   extern type const __start_linkarr_##name; \
   extern type const __stop_linkarr_##name;  \
@@ -384,8 +388,9 @@ void __asan_unpoison_memory_region(void const volatile *addr, size_t size);
 #elif defined(__MACH__)
 
 /* As described in: https://stackoverflow.com/a/22366882 */
-#define UPB_LINKARR_APPEND(name) \
-  __attribute__((retain, used, section("__DATA,__la_" #name)))
+#define UPB_LINKARR_APPEND(name)                              \
+  __attribute__((retain, used, section("__DATA,__la_" #name), \
+                 no_sanitize("address")))
 #define UPB_LINKARR_DECLARE(name, type)           \
   extern type const __start_linkarr_##name __asm( \
       "section$start$__DATA$__la_" #name);        \
@@ -405,8 +410,9 @@ void __asan_unpoison_memory_region(void const volatile *addr, size_t size);
 
 // Usage of __attribute__ here probably means this is Clang-specific, and would
 // not work on MSVC.
-#define UPB_LINKARR_APPEND(name) \
-  __declspec(allocate("la_" #name "$j")) __attribute__((retain, used))
+#define UPB_LINKARR_APPEND(name)         \
+  __declspec(allocate("la_" #name "$j")) \
+  __attribute__((retain, used, no_sanitize("address")))
 #define UPB_LINKARR_DECLARE(name, type)                               \
   __declspec(allocate("la_" #name "$a")) type __start_linkarr_##name; \
   __declspec(allocate("la_" #name "$z")) type __stop_linkarr_##name;  \
@@ -419,6 +425,17 @@ void __asan_unpoison_memory_region(void const volatile *addr, size_t size);
 // Linker arrays are not supported on this platform.  Make appends a no-op but
 // don't define the other macros.
 #define UPB_LINKARR_APPEND(name)
+
+#endif
+
+// Future versions of upb will include breaking changes to some APIs.
+// This macro can be set to enable these API changes ahead of time, so that
+// user code can be updated before upgrading versions of protobuf.
+#ifdef UPB_FUTURE_BREAKING_CHANGES
+
+// Properly enforce closed enums in python.
+// Owner: mkruskal@
+#define UPB_FUTURE_PYTHON_CLOSED_ENUM_ENFORCEMENT 1
 
 #endif
 
@@ -1206,8 +1223,8 @@ UPB_INLINE bool upb_StringView_IsEqual(upb_StringView a, upb_StringView b) {
  * regenerated.
  * NO CHECKED-IN PROTOBUF GENCODE */
 
-#ifndef GOOGLE_PROTOBUF_DESCRIPTOR_PROTO_UPB_H_
-#define GOOGLE_PROTOBUF_DESCRIPTOR_PROTO_UPB_H_
+#ifndef GOOGLE_PROTOBUF_DESCRIPTOR_PROTO_UPB_H__UPB_H_
+#define GOOGLE_PROTOBUF_DESCRIPTOR_PROTO_UPB_H__UPB_H_
 
 
 #ifndef UPB_GENERATED_CODE_SUPPORT_H_
@@ -1494,7 +1511,14 @@ UPB_API_INLINE size_t upb_Array_Size(const struct upb_Array* arr) {
 #define UPB_MESSAGE_VALUE_H_
 
 #include <stdint.h>
+#include <string.h>
 
+
+// Must be last.
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef union {
   bool bool_val;
@@ -1516,11 +1540,28 @@ typedef union {
   uintptr_t tagged_msg_val;  // upb_TaggedMessagePtr
 } upb_MessageValue;
 
+UPB_API_INLINE upb_MessageValue upb_MessageValue_Zero(void) {
+  upb_MessageValue zero;
+  memset(&zero, 0, sizeof(zero));
+  return zero;
+}
+
 typedef union {
   struct upb_Array* array;
   struct upb_Map* map;
   struct upb_Message* msg;
 } upb_MutableMessageValue;
+
+UPB_API_INLINE upb_MutableMessageValue upb_MutableMessageValue_Zero(void) {
+  upb_MutableMessageValue zero;
+  memset(&zero, 0, sizeof(zero));
+  return zero;
+}
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
+
 
 #endif /* UPB_MESSAGE_VALUE_H_ */
 
@@ -4998,7 +5039,7 @@ enum {
    *    already has some sub-message fields present.  If the sub-message does
    *    not occur in the binary payload, we will never visit it and discover the
    *    incomplete sub-message.  For this reason, this check is only useful for
-   *    implemting ParseFromString() semantics.  For MergeFromString(), a
+   *    implementing ParseFromString() semantics.  For MergeFromString(), a
    *    post-parse validation step will always be necessary. */
   kUpb_DecodeOption_CheckRequired = 2,
 
@@ -5333,8 +5374,8 @@ TAGBYTES(r)
  * regenerated.
  * NO CHECKED-IN PROTOBUF GENCODE */
 
-#ifndef GOOGLE_PROTOBUF_DESCRIPTOR_PROTO_UPB_MINITABLE_H_
-#define GOOGLE_PROTOBUF_DESCRIPTOR_PROTO_UPB_MINITABLE_H_
+#ifndef GOOGLE_PROTOBUF_DESCRIPTOR_PROTO_UPB_H__UPB_MINITABLE_H_
+#define GOOGLE_PROTOBUF_DESCRIPTOR_PROTO_UPB_H__UPB_MINITABLE_H_
 
 
 // Must be last.
@@ -5410,23 +5451,23 @@ extern const upb_MiniTable* google__protobuf__GeneratedCodeInfo_msg_init_ptr;
 extern const upb_MiniTable google__protobuf__GeneratedCodeInfo__Annotation_msg_init;
 extern const upb_MiniTable* google__protobuf__GeneratedCodeInfo__Annotation_msg_init_ptr;
 
-extern const upb_MiniTableEnum google_protobuf_Edition_enum_init;
-extern const upb_MiniTableEnum google_protobuf_ExtensionRangeOptions_VerificationState_enum_init;
-extern const upb_MiniTableEnum google_protobuf_FeatureSet_EnumType_enum_init;
-extern const upb_MiniTableEnum google_protobuf_FeatureSet_FieldPresence_enum_init;
-extern const upb_MiniTableEnum google_protobuf_FeatureSet_JsonFormat_enum_init;
-extern const upb_MiniTableEnum google_protobuf_FeatureSet_MessageEncoding_enum_init;
-extern const upb_MiniTableEnum google_protobuf_FeatureSet_RepeatedFieldEncoding_enum_init;
-extern const upb_MiniTableEnum google_protobuf_FeatureSet_Utf8Validation_enum_init;
-extern const upb_MiniTableEnum google_protobuf_FieldDescriptorProto_Label_enum_init;
-extern const upb_MiniTableEnum google_protobuf_FieldDescriptorProto_Type_enum_init;
-extern const upb_MiniTableEnum google_protobuf_FieldOptions_CType_enum_init;
-extern const upb_MiniTableEnum google_protobuf_FieldOptions_JSType_enum_init;
-extern const upb_MiniTableEnum google_protobuf_FieldOptions_OptionRetention_enum_init;
-extern const upb_MiniTableEnum google_protobuf_FieldOptions_OptionTargetType_enum_init;
-extern const upb_MiniTableEnum google_protobuf_FileOptions_OptimizeMode_enum_init;
-extern const upb_MiniTableEnum google_protobuf_GeneratedCodeInfo_Annotation_Semantic_enum_init;
-extern const upb_MiniTableEnum google_protobuf_MethodOptions_IdempotencyLevel_enum_init;
+extern const upb_MiniTableEnum google__protobuf__Edition_enum_init;
+extern const upb_MiniTableEnum google__protobuf__ExtensionRangeOptions__VerificationState_enum_init;
+extern const upb_MiniTableEnum google__protobuf__FeatureSet__EnumType_enum_init;
+extern const upb_MiniTableEnum google__protobuf__FeatureSet__FieldPresence_enum_init;
+extern const upb_MiniTableEnum google__protobuf__FeatureSet__JsonFormat_enum_init;
+extern const upb_MiniTableEnum google__protobuf__FeatureSet__MessageEncoding_enum_init;
+extern const upb_MiniTableEnum google__protobuf__FeatureSet__RepeatedFieldEncoding_enum_init;
+extern const upb_MiniTableEnum google__protobuf__FeatureSet__Utf8Validation_enum_init;
+extern const upb_MiniTableEnum google__protobuf__FieldDescriptorProto__Label_enum_init;
+extern const upb_MiniTableEnum google__protobuf__FieldDescriptorProto__Type_enum_init;
+extern const upb_MiniTableEnum google__protobuf__FieldOptions__CType_enum_init;
+extern const upb_MiniTableEnum google__protobuf__FieldOptions__JSType_enum_init;
+extern const upb_MiniTableEnum google__protobuf__FieldOptions__OptionRetention_enum_init;
+extern const upb_MiniTableEnum google__protobuf__FieldOptions__OptionTargetType_enum_init;
+extern const upb_MiniTableEnum google__protobuf__FileOptions__OptimizeMode_enum_init;
+extern const upb_MiniTableEnum google__protobuf__GeneratedCodeInfo__Annotation__Semantic_enum_init;
+extern const upb_MiniTableEnum google__protobuf__MethodOptions__IdempotencyLevel_enum_init;
 extern const upb_MiniTableFile google_protobuf_descriptor_proto_upb_file_layout;
 
 #ifdef __cplusplus
@@ -5434,7 +5475,7 @@ extern const upb_MiniTableFile google_protobuf_descriptor_proto_upb_file_layout;
 #endif
 
 
-#endif  /* GOOGLE_PROTOBUF_DESCRIPTOR_PROTO_UPB_MINITABLE_H_ */
+#endif  /* GOOGLE_PROTOBUF_DESCRIPTOR_PROTO_UPB_H__UPB_MINITABLE_H_ */
 
 
 // Must be last.
@@ -12315,7 +12356,7 @@ UPB_INLINE void google_protobuf_GeneratedCodeInfo_Annotation_set_semantic(google
 #endif
 
 
-#endif  /* GOOGLE_PROTOBUF_DESCRIPTOR_PROTO_UPB_H_ */
+#endif  /* GOOGLE_PROTOBUF_DESCRIPTOR_PROTO_UPB_H__UPB_H_ */
 #endif
 
 // IWYU pragma: end_exports
@@ -14340,8 +14381,8 @@ UPB_INLINE const char* upb_WireReader_SkipValue(
  * regenerated.
  * NO CHECKED-IN PROTOBUF GENCODE */
 
-#ifndef GOOGLE_PROTOBUF_DESCRIPTOR_PROTO_UPBDEFS_H_
-#define GOOGLE_PROTOBUF_DESCRIPTOR_PROTO_UPBDEFS_H_
+#ifndef GOOGLE_PROTOBUF_DESCRIPTOR_PROTO_UPB_H__UPBDEFS_H_
+#define GOOGLE_PROTOBUF_DESCRIPTOR_PROTO_UPB_H__UPBDEFS_H_
 
 
 #ifndef UPB_REFLECTION_DEF_POOL_INTERNAL_H_
@@ -14567,7 +14608,7 @@ UPB_INLINE const upb_MessageDef *google_protobuf_GeneratedCodeInfo_Annotation_ge
 #endif
 
 
-#endif  /* GOOGLE_PROTOBUF_DESCRIPTOR_PROTO_UPBDEFS_H_ */
+#endif  /* GOOGLE_PROTOBUF_DESCRIPTOR_PROTO_UPB_H__UPBDEFS_H_ */
 
 #ifndef UPB_LEX_STRTOD_H_
 #define UPB_LEX_STRTOD_H_
@@ -15271,6 +15312,7 @@ upb_MethodDef* _upb_MethodDefs_New(upb_DefBuilder* ctx, int n,
 #undef UPB_EXPORT
 #undef UPB_INLINE
 #undef UPB_API
+#undef UPBC_API
 #undef UPB_API_INLINE
 #undef UPB_ALIGN_UP
 #undef UPB_ALIGN_DOWN
@@ -15318,3 +15360,5 @@ upb_MethodDef* _upb_MethodDefs_New(upb_DefBuilder* ctx, int n,
 #undef UPB_LINKARR_APPEND
 #undef UPB_LINKARR_START
 #undef UPB_LINKARR_STOP
+#undef UPB_FUTURE_BREAKING_CHANGES
+#undef UPB_FUTURE_PYTHON_CLOSED_ENUM_ENFORCEMENT

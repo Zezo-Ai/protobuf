@@ -216,19 +216,9 @@ void SingularStringView::GenerateStaticMembers(io::Printer* p) const {
 }
 
 void SingularStringView::GenerateAccessorDeclarations(io::Printer* p) const {
-  ABSL_CHECK(!field_->options().has_ctype());
-
-  auto vars = AnnotatedAccessors(field_, {"", "set_allocated_"});
-  vars.push_back(Sub{
-      "release_name",
-      SafeFunctionName(field_->containing_type(), field_, "release_"),
-  }
-                     .AnnotatedAs(field_));
-  auto v1 = p->WithVars(vars);
+  auto v1 = p->WithVars(AnnotatedAccessors(field_, {""}));
   auto v2 = p->WithVars(
       AnnotatedAccessors(field_, {"set_"}, AnnotationCollector::kSet));
-  auto v3 = p->WithVars(
-      AnnotatedAccessors(field_, {"mutable_"}, AnnotationCollector::kAlias));
 
   p->Emit(
       {{"donated",
@@ -305,8 +295,6 @@ void SingularStringView::GenerateInlineAccessorDefinitions(
                }
              )cc");
            }},
-          {"release_name",
-           SafeFunctionName(field_->containing_type(), field_, "release_")},
       },
       R"cc(
         inline absl::string_view $Msg$::$name$() const
@@ -374,7 +362,7 @@ void SingularStringView::GenerateClearingCode(io::Printer* p) const {
 void SingularStringView::GenerateMessageClearingCode(io::Printer* p) const {
   if (is_oneof()) {
     p->Emit(R"cc(
-      this_.$field_$.Destroy();
+      $field_$.Destroy();
     )cc");
     return;
   }
@@ -390,7 +378,7 @@ void SingularStringView::GenerateMessageClearingCode(io::Printer* p) const {
 
   if (is_inlined() && HasHasbit(field_)) {
     p->Emit(R"cc(
-      $DCHK$(!this_.$field_$.IsDefault());
+      $DCHK$(!$field_$.IsDefault());
     )cc");
   }
 
@@ -398,7 +386,7 @@ void SingularStringView::GenerateMessageClearingCode(io::Printer* p) const {
     // Clear to a non-empty default is more involved, as we try to use the
     // Arena if one is present and may need to reallocate the string.
     p->Emit(R"cc(
-      this_.$field_$.ClearToDefault($lazy_var$, this_.GetArena());
+      $field_$.ClearToDefault($lazy_var$, GetArena());
     )cc");
     return;
   }
@@ -406,7 +394,7 @@ void SingularStringView::GenerateMessageClearingCode(io::Printer* p) const {
   p->Emit({{"Clear",
             HasHasbit(field_) ? "ClearNonDefaultToEmpty" : "ClearToEmpty"}},
           R"cc(
-            this_.$field_$.$Clear$();
+            $field_$.$Clear$();
           )cc");
 }
 
@@ -445,9 +433,9 @@ void SingularStringView::GenerateConstructorCode(io::Printer* p) const {
 
   if (EmptyDefault()) {
     p->Emit(R"cc(
-#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
-      $field_$.Set("", GetArena());
-#endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+      if ($pbi$::DebugHardenForceCopyDefaultString()) {
+        $field_$.Set("", GetArena());
+      }
     )cc");
   }
 }
@@ -502,7 +490,7 @@ void SingularStringView::GenerateDestructorCode(io::Printer* p) const {
   }
 
   p->Emit(R"cc(
-    $field_$.Destroy();
+    this_.$field_$.Destroy();
   )cc");
 }
 
@@ -577,9 +565,9 @@ class RepeatedStringView : public FieldGeneratorBase {
 
   void GenerateClearingCode(io::Printer* p) const override {
     if (should_split()) {
-      p->Emit("this_.$field_$.ClearIfNotDefault();\n");
+      p->Emit("$field_$.ClearIfNotDefault();\n");
     } else {
-      p->Emit("this_.$field_$.Clear();\n");
+      p->Emit("$field_$.Clear();\n");
     }
   }
 
@@ -612,7 +600,7 @@ class RepeatedStringView : public FieldGeneratorBase {
   void GenerateDestructorCode(io::Printer* p) const override {
     if (should_split()) {
       p->Emit(R"cc(
-        $field_$.DeleteIfNotDefault();
+        this_.$field_$.DeleteIfNotDefault();
       )cc");
     }
   }
@@ -649,8 +637,7 @@ class RepeatedStringView : public FieldGeneratorBase {
 };
 
 void RepeatedStringView::GenerateAccessorDeclarations(io::Printer* p) const {
-  bool unknown_ctype =
-      field_->options().ctype() != internal::cpp::EffectiveStringCType(field_);
+  bool unknown_ctype = GetDeclaredStringType() != pb::CppFeatures::VIEW;
 
   if (unknown_ctype) {
     p->Emit(R"cc(

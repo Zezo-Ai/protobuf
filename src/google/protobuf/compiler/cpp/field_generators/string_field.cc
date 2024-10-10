@@ -234,8 +234,7 @@ void SingularString::GenerateAccessorDeclarations(io::Printer* p) const {
   // files that applied the ctype.  The field can still be accessed via the
   // reflection interface since the reflection interface is independent of
   // the string's underlying representation.
-  bool unknown_ctype =
-      field_->options().ctype() != internal::cpp::EffectiveStringCType(field_);
+  bool unknown_ctype = GetDeclaredStringType() != pb::CppFeatures::STRING;
 
   if (unknown_ctype) {
     p->Emit(R"cc(
@@ -361,9 +360,9 @@ void SingularString::ReleaseImpl(io::Printer* p) const {
 
   p->Emit(R"cc(
     auto* released = $field_$.Release();
-#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
-    $field_$.Set("", $set_args$);
-#endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    if ($pbi$::DebugHardenForceCopyDefaultString()) {
+      $field_$.Set("", $set_args$);
+    }
     return released;
   )cc");
 }
@@ -406,11 +405,9 @@ void SingularString::SetAllocatedImpl(io::Printer* p) const {
 
   if (EmptyDefault()) {
     p->Emit(R"cc(
-#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
-      if ($field_$.IsDefault()) {
+      if ($pbi$::DebugHardenForceCopyDefaultString() && $field_$.IsDefault()) {
         $field_$.Set("", $set_args$);
       }
-#endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
     )cc");
   }
 }
@@ -539,7 +536,7 @@ void SingularString::GenerateClearingCode(io::Printer* p) const {
 void SingularString::GenerateMessageClearingCode(io::Printer* p) const {
   if (is_oneof()) {
     p->Emit(R"cc(
-      this_.$field_$.Destroy();
+      $field_$.Destroy();
     )cc");
     return;
   }
@@ -563,7 +560,7 @@ void SingularString::GenerateMessageClearingCode(io::Printer* p) const {
     // For non-inlined strings, we distinguish from non-default by comparing
     // instances, rather than contents.
     p->Emit(R"cc(
-      $DCHK$(!this_.$field_$.IsDefault());
+      $DCHK$(!$field_$.IsDefault());
     )cc");
   }
 
@@ -571,7 +568,7 @@ void SingularString::GenerateMessageClearingCode(io::Printer* p) const {
     // Clear to a non-empty default is more involved, as we try to use the
     // Arena if one is present and may need to reallocate the string.
     p->Emit(R"cc(
-      this_.$field_$.ClearToDefault($lazy_var$, this_.GetArena());
+      $field_$.ClearToDefault($lazy_var$, GetArena());
     )cc");
     return;
   }
@@ -579,7 +576,7 @@ void SingularString::GenerateMessageClearingCode(io::Printer* p) const {
   p->Emit({{"Clear",
             HasHasbit(field_) ? "ClearNonDefaultToEmpty" : "ClearToEmpty"}},
           R"cc(
-            this_.$field_$.$Clear$();
+            $field_$.$Clear$();
           )cc");
 }
 
@@ -618,9 +615,9 @@ void SingularString::GenerateConstructorCode(io::Printer* p) const {
 
   if (IsString(field_) && EmptyDefault()) {
     p->Emit(R"cc(
-#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
-      $field_$.Set("", GetArena());
-#endif  // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+      if ($pbi$::DebugHardenForceCopyDefaultString()) {
+        $field_$.Set("", GetArena());
+      }
     )cc");
   }
 }
@@ -675,7 +672,7 @@ void SingularString::GenerateDestructorCode(io::Printer* p) const {
   }
 
   p->Emit(R"cc(
-    $field_$.Destroy();
+    this_.$field_$.Destroy();
   )cc");
 }
 
@@ -750,9 +747,9 @@ class RepeatedString : public FieldGeneratorBase {
 
   void GenerateClearingCode(io::Printer* p) const override {
     if (should_split()) {
-      p->Emit("this_.$field_$.ClearIfNotDefault();\n");
+      p->Emit("$field_$.ClearIfNotDefault();\n");
     } else {
-      p->Emit("this_.$field_$.Clear();\n");
+      p->Emit("$field_$.Clear();\n");
     }
   }
 
@@ -785,7 +782,7 @@ class RepeatedString : public FieldGeneratorBase {
   void GenerateDestructorCode(io::Printer* p) const override {
     if (should_split()) {
       p->Emit(R"cc(
-        $field_$.DeleteIfNotDefault();
+        this_.$field_$.DeleteIfNotDefault();
       )cc");
     }
   }
@@ -822,8 +819,7 @@ class RepeatedString : public FieldGeneratorBase {
 };
 
 void RepeatedString::GenerateAccessorDeclarations(io::Printer* p) const {
-  bool unknown_ctype =
-      field_->options().ctype() != internal::cpp::EffectiveStringCType(field_);
+  bool unknown_ctype = GetDeclaredStringType() != pb::CppFeatures::STRING;
 
   if (unknown_ctype) {
     p->Emit(R"cc(

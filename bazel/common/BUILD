@@ -1,5 +1,7 @@
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
 
+package(default_applicable_licenses = ["//:license"])
+
 bzl_library(
     name = "proto_common_bzl",
     srcs = [
@@ -32,5 +34,13 @@ bzl_library(
     visibility = ["//visibility:public"],
     deps = [
         "//bazel/private:native_bzl",
+    ],
+)
+
+filegroup(
+    name = "bazel_osx_p4deps",
+    srcs = glob(["**"]) + ["@proto_bazel_features//:features"],
+    visibility = [
+        "//bazel:__pkg__",
     ],
 )
